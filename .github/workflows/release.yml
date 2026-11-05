@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Get-Content -Raw QODER_VERSION.txt).Trim()
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Check existing release
+        id: existing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.version.outputs.value }}"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Build installer
+        if: steps.existing.outputs.exists == 'false'
+        shell: cmd
+        run: Build.bat
+
+      - name: Package and checksums
+        if: steps.existing.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.version.outputs.value }}"
+          $zip = "qoder-ru-localization-$v-windows-x64.zip"
+          Compress-Archive -Path "QoderRU-Setup-$v.exe" -DestinationPath $zip -Force
+          $lines = @(
+            "$((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower())  $zip",
+            "$((Get-FileHash "QoderRU-Setup-$v.exe" -Algorithm SHA256).Hash.ToLower())  QoderRU-Setup-$v.exe"
+          )
+          Set-Content -Path checksums.txt -Value $lines -Encoding utf8
+          Get-Content checksums.txt
+
+      - name: Create release
+        if: steps.existing.outputs.exists == 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.version.outputs.value }}"
+          $tag = "v$v"
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --title "$tag — Qoder $v Russian localization" --notes-file "RELEASE_NOTES-$tag.md" "qoder-ru-localization-$v-windows-x64.zip" checksums.txt

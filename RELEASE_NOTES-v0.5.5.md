@@ -49,9 +49,4 @@
 | Windows x64 | [`qoder-ru-localization-0.5.5-windows-x64.zip`](../../releases/download/v0.5.5/qoder-ru-localization-0.5.5-windows-x64.zip) |
 | Checksums | [`checksums.txt`](../../releases/download/v0.5.5/checksums.txt) |
 
-SHA-256:
-
-```
-494861e3c196fb1bc654b911d4fedb17fb0495b3d0a4784acc2bec4ef6cf3163  qoder-ru-localization-0.5.5-windows-x64.zip
-f64dec1a987429499b058648d8205802166da7705cf35553763da4d6cc95f8ec  QoderRU-Setup-0.5.5.exe
-```
+SHA-256 сумм — в приложенном файле [`checksums.txt`](../../releases/download/v0.5.5/checksums.txt).
