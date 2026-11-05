@@ -30,12 +30,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v${{ steps.version.outputs.value }}"
+          $exists = 'false'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            "exists=true" >> $env:GITHUB_OUTPUT
-          } else {
-            "exists=false" >> $env:GITHUB_OUTPUT
-          }
+          if ($LASTEXITCODE -eq 0) { $exists = 'true' }
+          $global:LASTEXITCODE = 0
+          "exists=$exists" >> $env:GITHUB_OUTPUT
 
       - name: Build installer
         if: steps.existing.outputs.exists == 'false'
