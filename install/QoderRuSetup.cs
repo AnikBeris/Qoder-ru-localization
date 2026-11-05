@@ -320,6 +320,18 @@ namespace QoderRuSetup
         internal static string AutoDetect()
         {
             var candidates = new List<string>();
+            foreach (var process in Process.GetProcessesByName("Qoder"))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        string file = process.MainModule.FileName;
+                        if (!string.IsNullOrEmpty(file)) candidates.Add(Path.GetDirectoryName(file));
+                    }
+                    catch { }
+                }
+            }
             foreach (var root in new[] { Registry.LocalMachine, Registry.CurrentUser })
             {
                 foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
