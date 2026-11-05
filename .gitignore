@@ -1,0 +1,5 @@
+*.exe
+*.zip
+checksums.txt
+Thumbs.db
+.DS_Store
