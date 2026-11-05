@@ -9,6 +9,8 @@ on:
       - 'data/**'
       - 'Build.bat'
       - 'QODER_VERSION.txt'
+      - 'RELEASE_VERSION.txt'
+      - 'RELEASE_NOTES-*.md'
   workflow_dispatch:
 
 permissions:
@@ -20,34 +22,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read version
+      - name: Read versions
         id: version
         shell: pwsh
         run: |
-          $v = (Get-Content -Raw QODER_VERSION.txt).Trim()
-          "value=$v" >> $env:GITHUB_OUTPUT
+          $app = (Get-Content -Raw QODER_VERSION.txt).Trim()
+          $rel = (Get-Content -Raw RELEASE_VERSION.txt).Trim()
+          if (-not $app) { throw 'QODER_VERSION.txt is empty' }
+          if (-not $rel) { throw 'RELEASE_VERSION.txt is empty' }
+          "app=$app" >> $env:GITHUB_OUTPUT
+          "release=$rel" >> $env:GITHUB_OUTPUT
+          "tag=v$rel" >> $env:GITHUB_OUTPUT
 
-      - name: Check existing release
-        id: existing
+      - name: Refuse to overwrite an existing release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v${{ steps.version.outputs.value }}"
-          $exists = 'false'
+          $tag = "${{ steps.version.outputs.tag }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { $exists = 'true' }
+          if ($LASTEXITCODE -eq 0) {
+            Write-Error "Release $tag already exists. Bump RELEASE_VERSION.txt (for example 0.5.5-2) and push again; existing releases are never overwritten."
+            exit 1
+          }
           $global:LASTEXITCODE = 0
-          "exists=$exists" >> $env:GITHUB_OUTPUT
-
-      - name: Normalize release title
-        if: steps.existing.outputs.exists == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "v${{ steps.version.outputs.value }}"
-          gh release edit $tag --repo $env:GITHUB_REPOSITORY --title $tag
 
       - name: Build installer
         shell: cmd
@@ -56,31 +54,25 @@ jobs:
       - name: Package and checksums
         shell: pwsh
         run: |
-          $v = "${{ steps.version.outputs.value }}"
-          $zip = "qoder-ru-localization-$v-windows-x64.zip"
-          Compress-Archive -Path "QoderRU-Setup-$v.exe" -DestinationPath $zip -Force
+          $app = "${{ steps.version.outputs.app }}"
+          $rel = "${{ steps.version.outputs.release }}"
+          $exe = "QoderRU-Setup-$app.exe"
+          $zip = "qoder-ru-localization-$rel-windows-x64.zip"
+          Compress-Archive -Path $exe -DestinationPath $zip -Force
           $lines = @(
             "$((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower())  $zip",
-            "$((Get-FileHash "QoderRU-Setup-$v.exe" -Algorithm SHA256).Hash.ToLower())  QoderRU-Setup-$v.exe"
+            "$((Get-FileHash $exe -Algorithm SHA256).Hash.ToLower())  $exe"
           )
           Set-Content -Path checksums.txt -Value $lines -Encoding utf8
           Get-Content checksums.txt
 
       - name: Create release
-        if: steps.existing.outputs.exists == 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $v = "${{ steps.version.outputs.value }}"
-          $tag = "v$v"
-          gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes-file "RELEASE_NOTES-$tag.md" "qoder-ru-localization-$v-windows-x64.zip" checksums.txt
-
-      - name: Upload assets to existing release
-        if: steps.existing.outputs.exists == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $v = "${{ steps.version.outputs.value }}"
-          gh release upload "v$v" --repo $env:GITHUB_REPOSITORY --clobber "qoder-ru-localization-$v-windows-x64.zip" checksums.txt
+          $rel = "${{ steps.version.outputs.release }}"
+          $tag = "${{ steps.version.outputs.tag }}"
+          $notes = "RELEASE_NOTES-$tag.md"
+          if (-not (Test-Path $notes)) { throw "Missing $notes" }
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes-file $notes "qoder-ru-localization-$rel-windows-x64.zip" checksums.txt

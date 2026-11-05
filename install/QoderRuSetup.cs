@@ -698,6 +698,7 @@ namespace QoderRuSetup
         {
             @"resources\extensions\qoder.index-settings\dist\browser\view.cjs",
             @"resources\extensions\qoder.security\dist\browser\view.cjs",
+            @"resources\extensions\qoder.knowledge.center\dist\browser\view.cjs",
         };
 
         private const string PluginCatalogFile = @"resources\extensions\catalog.v1.json";
@@ -785,7 +786,42 @@ namespace QoderRuSetup
         {
             PatchIndexSettings(Path.Combine(dir, PluginFiles[0]), log, patched);
             PatchSecurity(Path.Combine(dir, PluginFiles[1]), log, patched);
+            PatchKnowledgeCenter(Path.Combine(dir, PluginFiles[2]), log, patched);
             if (patched.Count > 0) UpdatePluginCatalog(dir, log, patched);
+        }
+
+        private static void PatchKnowledgeCenter(string path, Action<string> log, List<string> patched)
+        {
+            const string label = "Плагин «База знаний»";
+            if (!File.Exists(path))
+            {
+                log(label + ": файл не найден, пропуск.");
+                return;
+            }
+            string backup = path + AsarBackupSuffix;
+            if (!File.Exists(backup)) File.Copy(path, backup, false);
+            string text = File.ReadAllText(backup, Encoding.UTF8);
+
+            var ru = NewSerializer().Deserialize<Dictionary<string, string>>(ReadResource("qoder-ru-knowledge.json"));
+            string ruJson = NewSerializer().Serialize(ru);
+            const string original =
+                "function copyForLocale(locale) {\n" +
+                "  return messages[isChineseLocale(locale) ? \"zh\" : \"en\"];\n" +
+                "}";
+            string replacement =
+                "var ruOverlay = " + ruJson + ";\n" +
+                "var ruMessages = Object.assign({}, messages.en, ruOverlay);\n" +
+                "function copyForLocale(locale) {\n" +
+                "  const q = (globalThis.__qoderRuLang || \"\").toLowerCase() || locale.toLowerCase();\n" +
+                "  if (q.startsWith(\"ru\")) return ruMessages;\n" +
+                "  return messages[isChineseLocale(locale) ? \"zh\" : \"en\"];\n" +
+                "}";
+            if (!TryReplaceOnce(ref text, original, replacement, label, log))
+                return;
+
+            File.WriteAllText(path, text, new UTF8Encoding(false));
+            patched.Add(PluginFiles[2]);
+            log(label + ": переведён.");
         }
 
         private static void UpdatePluginCatalog(string dir, Action<string> log, List<string> patched)
