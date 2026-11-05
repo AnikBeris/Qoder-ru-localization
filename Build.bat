@@ -25,7 +25,7 @@ if not exist "%CSC%" (
 set "VERJSON=%TEMP%\qoder-ru-version-%QV%.json"
 > "%VERJSON%" echo {"qoderVersion":"%QV%"}
 
-"%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -codepage:65001 -r:System.Web.Extensions.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll -resource:"%DICT%",qoder-ru-dict.json -resource:"data\ru-extra-ui.json",qoder-ru-extra.json -resource:"%VERJSON%",qoder-ru-version.json -out:"QoderRU-Setup-%QV%.exe" install\QoderRuSetup.cs
+"%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -codepage:65001 -r:System.Web.Extensions.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll -resource:"%DICT%",qoder-ru-dict.json -resource:"data\ru-extra-ui.json",qoder-ru-extra.json -resource:"data\ru-overlay.json",qoder-ru-overlay.json -resource:"%VERJSON%",qoder-ru-version.json -out:"QoderRU-Setup-%QV%.exe" install\QoderRuSetup.cs
 if errorlevel 1 (
   echo.
   echo Build failed.

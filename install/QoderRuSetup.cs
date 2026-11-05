@@ -420,7 +420,35 @@ namespace QoderRuSetup
             string dictJson = ReadResource("qoder-ru-dict.json");
             dictJson = dictJson.Replace("\u2028", "\\u2028").Replace("\u2029", "\\u2029");
             var dict = ParseFlatDictionary(dictJson);
-            log("Словарь: " + dict.Count.ToString("N0") + " строк");
+            var overlay = ParseFlatDictionary(ReadResource("qoder-ru-overlay.json"));
+            var catalog = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var kv in dict) catalog[kv.Key] = kv.Value;
+            foreach (var kv in overlay) catalog[kv.Key] = kv.Value;
+
+            var presetKeys = new[] { "leader", "researcher", "developer", "tester", "reviewer" };
+            var presets = new List<Dictionary<string, object>>();
+            foreach (string key in presetKeys)
+            {
+                string prefix = "settings.squadTemplateAgentPresets." + key + ".";
+                string name, description, instructions;
+                if (overlay.TryGetValue(prefix + "name", out name) &&
+                    overlay.TryGetValue(prefix + "description", out description) &&
+                    overlay.TryGetValue(prefix + "instructions", out instructions))
+                {
+                    presets.Add(new Dictionary<string, object>
+                    {
+                        { "key", key },
+                        { "name", name },
+                        { "description", description },
+                        { "instructions", instructions },
+                    });
+                }
+            }
+            if (presets.Count == presetKeys.Length)
+                catalog["settings.squadTemplateAgentPresets"] = presets.ToArray();
+
+            string catalogJson = NewSerializer().Serialize(catalog);
+            log("Словарь: " + dict.Count.ToString("N0") + " строк, переопределений: " + overlay.Count.ToString("N0"));
 
             string i18nPath = null, settingsPath = null;
             string i18n = null, settings = null;
@@ -448,7 +476,7 @@ namespace QoderRuSetup
             {
                 i18n = ReplaceOnce(i18n,
                     ",he=\"loop.language\";function Tt(o){return o===\"zh\"||o===\"en\"?o:null}",
-                    ";St.ru={translation:" + dictJson + "};const he=\"loop.language\";function Tt(o){return o===\"zh\"||o===\"en\"||o===\"ru\"?o:null}",
+                    ";St.ru={translation:" + catalogJson + "};const he=\"loop.language\";function Tt(o){return o===\"zh\"||o===\"en\"||o===\"ru\"?o:null}",
                     "i18n resources");
                 i18n = ReplaceOnce(i18n,
                     "function Ni(o){return o[0]?.toLowerCase().startsWith(\"zh\")?\"zh\":\"en\"}",
@@ -497,13 +525,17 @@ namespace QoderRuSetup
                     "language lists");
                 i18n = ReplaceOnce(i18n,
                     ",...qe.en}}},Be=\"loop.language\";",
-                    ",...qe.en}},ru:{translation:" + dictJson + "}},Be=\"loop.language\";",
+                    ",...qe.en}},ru:{translation:" + catalogJson + "}},Be=\"loop.language\";",
                     "i18n resources");
                 i18n = ReplaceOnce(i18n, ",en=Zi(Ht(),Xi)", ",en=Ht()??\"ru\"", "default language");
                 i18n = ReplaceOnce(i18n,
                     "qt=i=>{typeof document>\"u\"||(document.documentElement.lang=i===\"zh\"?\"zh-CN\":i===\"en\"?\"en-US\":i)}",
                     "qt=i=>{typeof document>\"u\"||(document.documentElement.lang=i===\"zh\"?\"zh-CN\":i===\"en\"?\"en-US\":i===\"ru\"?\"ru-RU\":i)}",
                     "document lang");
+                i18n = ReplaceOnce(i18n,
+                    "qt(v.language);v.on(\"languageChanged\",qt);",
+                    "qt(v.language);v.on(\"languageChanged\",qt);globalThis.__qoderRuLang=v.language;v.on(\"languageChanged\",i=>{globalThis.__qoderRuLang=i});",
+                    "language global");
             }
 
             string dynamicPath = Path.Combine(dir, "resources", "dynamic-text", "qoder.json");
@@ -529,10 +561,11 @@ namespace QoderRuSetup
                     if (dict.TryGetValue(kv.Key, out ru) && ru != en) dynMap[en] = ru;
                 }
             }
-            foreach (var kv in ParseFlatDictionary(ReadResource("qoder-ru-extra.json")))
+            var extraMap = ParseFlatDictionary(ReadResource("qoder-ru-extra.json"));
+            foreach (var kv in extraMap)
                 dynMap[kv.Key] = kv.Value;
 
-            string observer = BuildObserver(NewSerializer().Serialize(dynMap));
+            string observer = BuildObserver(NewSerializer().Serialize(dynMap), "{}");
             i18n = i18n + "\n" + observer;
             log("Динамических строк для замены: " + dynMap.Count);
 
@@ -570,6 +603,9 @@ namespace QoderRuSetup
                 log("dynamic-text: добавлена секция ru");
             }
 
+            var patchedPlugins = new List<string>();
+            PatchPlugins(dir, log, patchedPlugins);
+
             string originalIntegrity = oldIntegrity;
             if (File.Exists(statePath))
             {
@@ -600,6 +636,7 @@ namespace QoderRuSetup
                 { "patchedAsarIntegrity", newHash },
                 { "backupAsar", "resources\\app.asar" + AsarBackupSuffix },
                 { "dynamicText", dynamicEn != null },
+                { "patchedPlugins", patchedPlugins.ToArray() },
             };
             File.WriteAllText(statePath, NewSerializer().Serialize(state), new UTF8Encoding(false));
             log("Готово. Запустите Qoder.");
@@ -635,9 +672,265 @@ namespace QoderRuSetup
                 log("dynamic-text восстановлен.");
             }
 
+            var restoredPlugins = state.ContainsKey("patchedPlugins") ? state["patchedPlugins"] as object[] : null;
+            if (restoredPlugins != null)
+            {
+                foreach (object item in restoredPlugins)
+                {
+                    string relative = item as string;
+                    if (string.IsNullOrEmpty(relative)) continue;
+                    string pluginPath = Path.Combine(dir, relative);
+                    string pluginBackup = pluginPath + AsarBackupSuffix;
+                    if (File.Exists(pluginBackup))
+                    {
+                        File.Copy(pluginBackup, pluginPath, true);
+                        log("Восстановлен плагин: " + relative);
+                    }
+                }
+            }
+
             state["rolledBackAt"] = DateTime.UtcNow.ToString("o");
             File.WriteAllText(statePath, NewSerializer().Serialize(state), new UTF8Encoding(false));
             log("Откат завершён.");
+        }
+
+        private static readonly string[] PluginFiles =
+        {
+            @"resources\extensions\qoder.index-settings\dist\browser\view.cjs",
+            @"resources\extensions\qoder.security\dist\browser\view.cjs",
+        };
+
+        private const string PluginCatalogFile = @"resources\extensions\catalog.v1.json";
+
+        private const string IndexSettingsRu = @"var ru = {
+  title: ""Индекс рабочей области"",
+  description: ""Управление индексами кода для локальных рабочих областей, открытых в Qoder."",
+  repositories: ""Репозитории"",
+  workspaceIndexTitle: ""Индекс рабочей области"",
+  workspaceIndexDescription: ""Индекс рабочей области даёт агенту больше контекста и помогает точнее отвечать. {learnMore} об обработке данных индекса рабочей области."",
+  workspaceIndexLearnMore: ""Подробнее"",
+  workspaceIndexDocsUrl: ""https://docs.qoder.com/qoder/indexing"",
+  sharedWorkspaceBlockedPrefix: ""Этот репозиторий также принадлежит "",
+  sharedWorkspaceBlockedTarget: ""другой рабочей области"",
+  sharedWorkspaceBlockedTargetPlural: ""другим рабочим областям"",
+  sharedWorkspaceBlockedSuffix: "", где индексация рабочей области отключена. Автоматическая индексация приостановлена."",
+  workspaceIndexPaused: ""Индексация рабочей области здесь отключена. Автоматическая индексация приостановлена."",
+  expandWorkspace: ""Развернуть рабочую область"",
+  collapseWorkspace: ""Свернуть рабочую область"",
+  saving: ""Сохранение…"",
+  opening: ""Открытие…"",
+  starting: ""Запуск индексации…"",
+  autoUpdateBusy: ""Индекс проверяется или обновляется. Автоматическую индексацию можно изменить после завершения."",
+  loading: ""Загрузка настроек индексации"",
+  retry: ""Повторить"",
+  signedOutTitle: ""Войдите в Qoder"",
+  signedOutDescription: ""Войдите, чтобы плагин мог найти службу Qoder Context для вашей учётной записи."",
+  daemonUnavailableTitle: ""Служба индексации не запущена"",
+  daemonUnavailableDescription: ""Попробуйте перезапустить Qoder, чтобы восстановить службу индексации."",
+  daemonNotReadyDescription: ""Рабочие области загружаются из Qoder. Состояние индекса и действия станут доступны после подключения Qoder Context."",
+  emptyTitle: ""Нет репозиториев для индексации"",
+  emptyDescription: ""Добавьте репозиторий в локальную рабочую область Qoder, чтобы управлять его индексом здесь."",
+  loadFailedTitle: ""Не удалось загрузить настройки индексации"",
+  policyDisabled: ""Индексация кодовой базы отключена серверной политикой. Ручные и автоматические действия недоступны."",
+  indexTitle: ""Состояние индекса"",
+  startIndex: ""Начать индексацию"",
+  manualUpdate: ""Обновить сейчас"",
+  cancel: ""Отмена"",
+  cancelling: ""Отмена…"",
+  autoUpdate: ""Автоматическая индексация"",
+  autoUpdateDescription: ""Автоматически создавать и обновлять индексы для кодовых баз с числом файлов менее 10 000"",
+  autoUpdateUnavailable: ""Достигнут лимит автоматической индексации. Ручное обновление остаётся доступным."",
+  ignoreFiles: ""Игнорируемые файлы"",
+  ignoreFilesDescription: ""Укажите файлы и папки, исключаемые из индексации. Это дополнение к существующим правилам .gitignore"",
+  manage: ""Управление игнорируемыми файлами"",
+  ignoreFileOpenFailed: ""Не удалось открыть .qoderignore. Убедитесь, что каталог репозитория доступен, и повторите попытку."",
+  notIndexed: ""Не индексируется"",
+  quotaExceededPrefix: ""Достигнут лимит индексов кодовой базы. "",
+  quotaExceededUpgrade: ""Обновите тариф"",
+  quotaExceededSuffix: "", чтобы продолжить."",
+  indexing: ""Индексация"",
+  ready: ""Индексация завершена"",
+  errors: {
+    signedOut: { title: ""Вы не вошли"", description: ""Войдите в Qoder и повторите попытку."" },
+    daemonUnavailable: { title: ""Служба индексации недоступна"", description: ""Поддерживайте локальный сеанс запущенным и повторите попытку."" },
+    workspaceNotFound: { title: ""Репозиторий не найден"", description: ""Обновите список: репозитории рабочей области могли измениться."" },
+    workspaceUnavailable: { title: ""Репозиторий недоступен"", description: ""Каталог был перемещён, удалён или недоступен."" },
+    unauthorized: { title: ""Срок авторизации истёк"", description: ""Поддерживайте сеанс входа запущенным и повторите попытку после переподключения."" },
+    network: { title: ""Ошибка сети"", description: ""Служба индексации недоступна. Повторите попытку позже."" },
+    quotaExceeded: { title: ""Превышена квота индексации"", description: ""У этой учётной записи не осталось квоты на индексы кода."" },
+    fileLimitExceeded: { title: ""Превышен автоматический лимит"", description: ""Вы по-прежнему можете обновить этот репозиторий вручную."" },
+    unexpected: { title: ""Не удалось выполнить действие с индексом"", description: ""Произошла непредвиденная ошибка. Повторите попытку позже."" }
+  }
+};
+";
+
+        private const string SecurityCopyRu = @"var ruCopy = {
+  title: ""Безопасность"",
+  description: ""Qoder встраивает безопасность в процесс разработки с помощью трёхуровневого прогрессивного сканирования и автоматических исправлений, помогая делать каждое изменение кода безопасным."",
+  scanRecommendationDescription: ""Когда функция включена, Qoder интеллектуально рекомендует соответствующие проверки безопасности на подходящих этапах, а затем сканирует и исправляет проблемы после вашего подтверждения."",
+  scanningTiers: ""Уровни сканирования"",
+  free: ""Бесплатно"",
+  loading: ""Загрузка настроек сканирования безопасности…"",
+  loadFailed: ""Не удалось загрузить настройки сканирования безопасности. Повторите попытку."",
+  retry: ""Повторить"",
+  saveFailed: ""Не удалось сохранить настройку сканирования безопасности. Переключатель восстановлен. Повторите попытку."",
+  managedUpdateDenied: ""Это сканирование безопасности управляется вашей организацией и не может быть изменено здесь."",
+  enterpriseManaged: ""Управляется"",
+  forceOnDescription: ""Ваша организация требует, чтобы это сканирование оставалось включённым."",
+  forceOffDescription: ""Ваша организация отключила это сканирование.""
+};
+";
+
+        private static void PatchPlugins(string dir, Action<string> log, List<string> patched)
+        {
+            PatchIndexSettings(Path.Combine(dir, PluginFiles[0]), log, patched);
+            PatchSecurity(Path.Combine(dir, PluginFiles[1]), log, patched);
+            if (patched.Count > 0) UpdatePluginCatalog(dir, log, patched);
+        }
+
+        private static void UpdatePluginCatalog(string dir, Action<string> log, List<string> patched)
+        {
+            string catalogPath = Path.Combine(dir, PluginCatalogFile);
+            if (!File.Exists(catalogPath))
+            {
+                log("Каталог плагинов: файл не найден, пропуск обновления хэшей.");
+                return;
+            }
+            string backup = catalogPath + AsarBackupSuffix;
+            if (!File.Exists(backup)) File.Copy(catalogPath, backup, false);
+            string src = File.Exists(backup) ? backup : catalogPath;
+            var serializer = NewSerializer();
+            var root = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(src, Encoding.UTF8));
+            var plugins = root.ContainsKey("plugins") ? root["plugins"] as System.Collections.IList : null;
+            if (plugins == null)
+            {
+                log("Каталог плагинов: структура не распознана, пропуск обновления хэшей.");
+                return;
+            }
+            int updated = 0;
+            foreach (object item in plugins)
+            {
+                var plugin = item as Dictionary<string, object>;
+                if (plugin == null || !plugin.ContainsKey("id") || !plugin.ContainsKey("files")) continue;
+                string id = plugin["id"] as string;
+                var files = plugin["files"] as System.Collections.IList;
+                if (string.IsNullOrEmpty(id) || files == null) continue;
+                foreach (object fileItem in files)
+                {
+                    var file = fileItem as Dictionary<string, object>;
+                    if (file == null || !file.ContainsKey("path")) continue;
+                    string relative = file["path"] as string;
+                    if (string.IsNullOrEmpty(relative)) continue;
+                    string full = Path.Combine(dir, @"resources\extensions\" + id, relative.Replace('/', '\\'));
+                    if (!File.Exists(full)) continue;
+                    file["sha256"] = Sha256FileHex(full);
+                    updated++;
+                }
+            }
+            File.WriteAllText(catalogPath, serializer.Serialize(root), new UTF8Encoding(false));
+            patched.Add(PluginCatalogFile);
+            log("Каталог плагинов: обновлено хэшей — " + updated + ".");
+        }
+
+        private static void PatchIndexSettings(string path, Action<string> log, List<string> patched)
+        {
+            const string label = "Плагин «Индекс рабочей области»";
+            if (!File.Exists(path))
+            {
+                log(label + ": файл не найден, пропуск.");
+                return;
+            }
+            string backup = path + AsarBackupSuffix;
+            if (!File.Exists(backup)) File.Copy(path, backup, false);
+            string text = File.ReadAllText(backup, Encoding.UTF8);
+
+            int insertAt = text.IndexOf("function copyForLocale(locale) {", StringComparison.Ordinal);
+            if (insertAt < 0)
+            {
+                log(label + ": шаблон copyForLocale не найден, пропуск.");
+                return;
+            }
+            text = text.Substring(0, insertAt) + IndexSettingsRu + text.Substring(insertAt);
+            if (!TryReplaceOnce(ref text,
+                "return locale.toLowerCase().startsWith(\"zh\") ? zh : en;",
+                "const q = (globalThis.__qoderRuLang || \"\").toLowerCase() || locale.toLowerCase();\n  return q.startsWith(\"zh\") ? zh : q.startsWith(\"ru\") ? ru : en;",
+                label, log))
+                return;
+
+            File.WriteAllText(path, text, new UTF8Encoding(false));
+            patched.Add(PluginFiles[0]);
+            log(label + ": переведён.");
+        }
+
+        private static void PatchSecurity(string path, Action<string> log, List<string> patched)
+        {
+            const string label = "Плагин «Безопасность»";
+            if (!File.Exists(path))
+            {
+                log(label + ": файл не найден, пропуск.");
+                return;
+            }
+            string backup = path + AsarBackupSuffix;
+            if (!File.Exists(backup)) File.Copy(path, backup, false);
+            string text = File.ReadAllText(backup, Encoding.UTF8);
+
+            int insertAt = text.IndexOf("function copyForLocale(locale) {", StringComparison.Ordinal);
+            if (insertAt < 0)
+            {
+                log(label + ": шаблон copyForLocale не найден, пропуск.");
+                return;
+            }
+            text = text.Substring(0, insertAt) + SecurityCopyRu + text.Substring(insertAt);
+
+            var replacements = new[]
+            {
+                new[] { "title: { en: \"Static Check\",", "title: { en: \"Static Check\", ru: \"Статическая проверка\"," },
+                new[] { "title: { en: \"Lightweight Scan\",", "title: { en: \"Lightweight Scan\", ru: \"Облегчённое сканирование\"," },
+                new[] { "title: { en: \"Deep Scan\",", "title: { en: \"Deep Scan\", ru: \"Глубокое сканирование\"," },
+                new[] { "en: \"Checks code generated in the current task for common high-risk patterns and fixes them automatically.\",", "en: \"Checks code generated in the current task for common high-risk patterns and fixes them automatically.\",\n      ru: \"Проверяет код, созданный в текущей задаче, на типовые опасные шаблоны и автоматически исправляет их.\"," },
+                new[] { "en: \"Analyzes incremental code for risks such as SQL injection, remote command execution, and sensitive data leaks.\",", "en: \"Analyzes incremental code for risks such as SQL injection, remote command execution, and sensitive data leaks.\",\n      ru: \"Анализирует инкрементальные изменения кода на риски, такие как SQL-инъекции, удалённое выполнение команд и утечка конфиденциальных данных.\"," },
+                new[] { "en: \"Traces data flows across files and functions to uncover hidden cross-file vulnerabilities.\",", "en: \"Traces data flows across files and functions to uncover hidden cross-file vulnerabilities.\",\n      ru: \"Отслеживает потоки данных между файлами и функциями, чтобы выявить скрытые межфайловые уязвимости.\"," },
+                new[] { "return locale.toLowerCase().startsWith(\"zh\") ? value.zh : value.en;", "const q = (globalThis.__qoderRuLang || \"\").toLowerCase() || locale.toLowerCase();\n  return q.startsWith(\"zh\") ? value.zh : q.startsWith(\"ru\") && value.ru ? value.ru : value.en;" },
+                new[] { "if (locale.toLowerCase().startsWith(\"zh\")) {", "const q = (globalThis.__qoderRuLang || \"\").toLowerCase() || locale.toLowerCase();\n  if (q.startsWith(\"ru\")) return ruCopy;\n  if (q.startsWith(\"zh\")) {" },
+            };
+            foreach (string[] pair in replacements)
+            {
+                if (!TryReplaceOnce(ref text, pair[0], pair[1], label, log))
+                    return;
+            }
+
+            File.WriteAllText(path, text, new UTF8Encoding(false));
+            patched.Add(PluginFiles[1]);
+            log(label + ": переведён.");
+        }
+
+        private static string Sha256FileHex(string path)
+        {
+            using (var sha = SHA256.Create())
+            using (var stream = File.OpenRead(path))
+            {
+                byte[] hash = sha.ComputeHash(stream);
+                var sb = new StringBuilder(hash.Length * 2);
+                foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        private static bool TryReplaceOnce(ref string source, string from, string to, string label, Action<string> log)
+        {
+            int idx = source.IndexOf(from, StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                log(label + ": шаблон не найден (" + from.Substring(0, Math.Min(40, from.Length)) + "…), пропуск.");
+                return false;
+            }
+            if (source.IndexOf(from, idx + 1, StringComparison.Ordinal) >= 0)
+            {
+                log(label + ": шаблон встречается более одного раза, пропуск.");
+                return false;
+            }
+            source = source.Substring(0, idx) + to + source.Substring(idx + from.Length);
+            return true;
         }
 
         private static void EnsureNotRunning(string dir, Action<string> log)
@@ -690,11 +983,19 @@ namespace QoderRuSetup
             return result;
         }
 
-        private static string BuildObserver(string mapJson)
+        private static string BuildObserver(string mapJson, string fragmentJson)
         {
-            return ";(()=>{const M=" + mapJson +
-                ";const T=n=>{if(n.nodeType===3){const s=n.nodeValue,t=s.trim(),r=M[t];if(r&&r!==t)n.nodeValue=s.replace(t,r)}else if(n.nodeType===1){for(const a of[\"title\",\"aria-label\",\"placeholder\",\"alt\"]){const v=n.getAttribute&&n.getAttribute(a);if(v&&M[v])n.setAttribute(a,M[v])}for(const c of n.childNodes)T(c)}};" +
-                "const S=()=>{const b=document.body;if(!b)return;T(b);const o=new MutationObserver(ms=>{for(const m of ms){if(m.type===\"characterData\")T(m.target);else for(const n of m.addedNodes)T(n)}});o.observe(b,{subtree:true,childList:true,characterData:true})};" +
+            return ";globalThis.__qoderRuObserver=1;(()=>{const M=" + mapJson + ",F=" + fragmentJson +
+                ";const KS=Object.keys(F).sort((a,b)=>b.length-a.length);" +
+                "const RX=KS.map(k=>{const esc=k.replace(/[.*+?^${}()|[\\]\\\\]/g,\"\\\\$&\");const lb=/^[A-Za-z0-9]/.test(k)?\"(?<![A-Za-z0-9])\":\"\";const la=/[A-Za-z0-9]$/.test(k)?\"(?![A-Za-z0-9])\":\"\";return[new RegExp(lb+esc+la,\"g\"),F[k]]});" +
+                "const SK=n=>{const p=n.parentElement;return p&&/^(STYLE|SCRIPT|TEXTAREA|CODE|PRE)$/.test(p.tagName)};" +
+                "const TR=s=>{const t=s.trim(),r=M[t];if(r&&r!==t)return s.replace(t,r);if(t.length>3){let o=s;for(const x of RX)o=o.replace(x[0],x[1]);if(o!==s)return o}return s};" +
+                "const T=n=>{if(n.nodeType===3){if(SK(n))return;const r=TR(n.nodeValue);if(r!==n.nodeValue)n.nodeValue=r}" +
+                "else if(n.nodeType===1||n.nodeType===11){if(n.nodeType===1)for(const a of[\"title\",\"aria-label\",\"placeholder\",\"alt\"]){const v=n.getAttribute&&n.getAttribute(a);if(v&&M[v])n.setAttribute(a,M[v])}" +
+                "if(n.shadowRoot){T(n.shadowRoot);O(n.shadowRoot)}for(const c of n.childNodes)T(c)}};" +
+                "const W=new WeakSet();" +
+                "const O=r=>{if(!r||W.has(r))return;W.add(r);const o=new MutationObserver(ms=>{for(const m of ms){if(m.type===\"characterData\")T(m.target);else for(const n of m.addedNodes)T(n)}});o.observe(r,{subtree:true,childList:true,characterData:true})};" +
+                "const S=()=>{const b=document.body;if(!b)return;T(b);O(b)};" +
                 "if(document.body)S();else document.addEventListener(\"DOMContentLoaded\",S,{once:true})})();";
         }
 

@@ -2,5 +2,10 @@
   "Auto approve": "Автоодобрение",
   "Workspace index": "Индекс рабочей области",
   "Sites": "Сайты",
-  "Security": "Безопасность"
+  "Security": "Безопасность",
+  "Project manager": "Менеджер проекта",
+  "Researcher": "Исследователь",
+  "Full-stack engineer": "Full-stack-инженер",
+  "Test engineer": "Инженер по тестированию",
+  "Code reviewer": "Код-ревьюер"
 }
