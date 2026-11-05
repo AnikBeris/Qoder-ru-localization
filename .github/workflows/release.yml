@@ -36,13 +36,20 @@ jobs:
           $global:LASTEXITCODE = 0
           "exists=$exists" >> $env:GITHUB_OUTPUT
 
+      - name: Normalize release title
+        if: steps.existing.outputs.exists == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.version.outputs.value }}"
+          gh release edit $tag --repo $env:GITHUB_REPOSITORY --title $tag
+
       - name: Build installer
-        if: steps.existing.outputs.exists == 'false'
         shell: cmd
         run: Build.bat
 
       - name: Package and checksums
-        if: steps.existing.outputs.exists == 'false'
         shell: pwsh
         run: |
           $v = "${{ steps.version.outputs.value }}"
@@ -63,4 +70,13 @@ jobs:
         run: |
           $v = "${{ steps.version.outputs.value }}"
           $tag = "v$v"
-          gh release create $tag --repo $env:GITHUB_REPOSITORY --title "$tag — Qoder $v Russian localization" --notes-file "RELEASE_NOTES-$tag.md" "qoder-ru-localization-$v-windows-x64.zip" checksums.txt
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes-file "RELEASE_NOTES-$tag.md" "qoder-ru-localization-$v-windows-x64.zip" checksums.txt
+
+      - name: Upload assets to existing release
+        if: steps.existing.outputs.exists == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.version.outputs.value }}"
+          gh release upload "v$v" --repo $env:GITHUB_REPOSITORY --clobber "qoder-ru-localization-$v-windows-x64.zip" checksums.txt

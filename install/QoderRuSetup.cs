@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -53,6 +54,8 @@ namespace QoderRuSetup
 
     internal sealed class SetupForm : Form
     {
+        private const string ReleasesPage = "https://github.com/AnikBeris/Qoder-ru-localization/releases";
+
         private readonly TextBox _path = new TextBox();
         private readonly TextBox _log = new TextBox();
         private readonly ProgressBar _progress = new ProgressBar();
@@ -60,6 +63,8 @@ namespace QoderRuSetup
         private readonly Button _rollback = new Button();
         private readonly Button _browse = new Button();
         private readonly Label _status = new Label();
+        private readonly LinkLabel _update = new LinkLabel();
+        private string _updateUrl = ReleasesPage;
         private bool _busy;
 
         public SetupForm()
@@ -87,14 +92,15 @@ namespace QoderRuSetup
                 AutoSize = true,
                 Location = new Point(18, 52),
             };
-            _path.Location = new Point(20, 74);
-            _path.Width = 470;
-            _path.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            _browse.Text = "Обзор…";
-            _browse.Location = new Point(498, 72);
+            _browse.Text = "Директория";
+            _browse.Location = new Point(20, 72);
             _browse.Width = 120;
-            _browse.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _browse.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             _browse.Click += (s, e) => Browse();
+
+            _path.Location = new Point(150, 74);
+            _path.Width = ClientSize.Width - 150 - 20;
+            _path.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
             _install.Text = "Установить русский";
             _install.Location = new Point(20, 112);
@@ -110,7 +116,12 @@ namespace QoderRuSetup
             _status.AutoSize = true;
             _status.Location = new Point(20, 158);
 
-            _progress.Location = new Point(20, 182);
+            _update.Text = "Проверка обновлений…";
+            _update.AutoSize = true;
+            _update.Location = new Point(20, 178);
+            _update.LinkClicked += (s, e) => OpenLink(_updateUrl);
+
+            _progress.Location = new Point(20, 202);
             _progress.Size = new Size(598, 16);
             _progress.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             _progress.Style = ProgressBarStyle.Continuous;
@@ -118,21 +129,35 @@ namespace QoderRuSetup
             _log.Multiline = true;
             _log.ReadOnly = true;
             _log.ScrollBars = ScrollBars.Vertical;
-            _log.Location = new Point(20, 210);
-            _log.Size = new Size(598, 250);
+            _log.Location = new Point(20, 230);
+            _log.Size = new Size(598, 230);
             _log.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             _log.BackColor = Color.White;
             _log.Font = new Font("Consolas", 9f);
 
+            var credit = new LinkLabel
+            {
+                Text = "Разработчик: AnikBeris",
+                AutoSize = true,
+                LinkColor = Color.RoyalBlue,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            };
+            credit.Location = new Point(ClientSize.Width - credit.PreferredWidth - 20, 20);
+            credit.LinkClicked += (s, e) => OpenLink("https://github.com/AnikBeris");
+
             Controls.Add(caption);
             Controls.Add(hint);
+            Controls.Add(credit);
             Controls.Add(_path);
             Controls.Add(_browse);
             Controls.Add(_install);
             Controls.Add(_rollback);
             Controls.Add(_status);
+            Controls.Add(_update);
             Controls.Add(_progress);
             Controls.Add(_log);
+
+            Shown += (s, e) => new Thread(CheckUpdates) { IsBackground = true }.Start();
 
             string detected = Patcher.AutoDetect();
             if (!string.IsNullOrEmpty(detected))
@@ -158,6 +183,83 @@ namespace QoderRuSetup
                     Append("Выбрана папка: " + dlg.SelectedPath);
                 }
             }
+        }
+
+        private static void OpenLink(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+        }
+
+        private void CheckUpdates()
+        {
+            string current = null;
+            try { current = Patcher.TargetVersion(); } catch { }
+
+            string latestTag = null;
+            string releaseUrl = ReleasesPage;
+            try
+            {
+                try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; } catch { }
+                var request = (HttpWebRequest)WebRequest.Create(ReleasesPage + "/latest");
+                request.AllowAutoRedirect = false;
+                request.UserAgent = "QoderRU-Setup";
+                request.Timeout = 10000;
+                request.ReadWriteTimeout = 10000;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                {
+                    string location = response.Headers["Location"];
+                    if (!string.IsNullOrEmpty(location))
+                    {
+                        int idx = location.IndexOf("/tag/", StringComparison.OrdinalIgnoreCase);
+                        if (idx >= 0)
+                        {
+                            latestTag = Uri.UnescapeDataString(location.Substring(idx + 5).TrimEnd('/'));
+                            releaseUrl = location;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (latestTag == null)
+            {
+                ShowUpdate("Не удалось проверить обновления — страница релизов", ReleasesPage, true);
+                return;
+            }
+
+            string latest = latestTag.TrimStart('v', 'V');
+            if (current == null)
+                ShowUpdate("Последняя версия русификатора: " + latestTag, releaseUrl, true);
+            else if (CompareVersions(latest, current) > 0)
+                ShowUpdate("Доступна новая версия: " + latestTag + " — скачать", releaseUrl, true);
+            else
+                ShowUpdate("Установлена последняя версия (" + latestTag + ")", ReleasesPage, false);
+        }
+
+        private void ShowUpdate(string text, string url, bool clickable)
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired) { BeginInvoke(new Action<string, string, bool>(ShowUpdate), text, url, clickable); return; }
+            _updateUrl = url;
+            _update.Text = text;
+            _update.Enabled = clickable;
+            _update.LinkColor = clickable ? Color.RoyalBlue : SystemColors.GrayText;
+            Append(text);
+        }
+
+        private static int CompareVersions(string a, string b)
+        {
+            string[] left = (a ?? "").Split('.');
+            string[] right = (b ?? "").Split('.');
+            int count = Math.Max(left.Length, right.Length);
+            for (int i = 0; i < count; i++)
+            {
+                int x, y;
+                int.TryParse(i < left.Length ? left[i] : "0", out x);
+                int.TryParse(i < right.Length ? right[i] : "0", out y);
+                if (x != y) return x.CompareTo(y);
+            }
+            return 0;
         }
 
         private void Append(string text)
