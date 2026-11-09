@@ -19,8 +19,8 @@ server-delivered texts.
 
 ## Version matching
 
-**A localization release always matches one exact Qoder version.** This release
-targets **Qoder 0.5.5**.
+**A localization release always matches one exact Qoder version.** Releases
+exist for **Qoder 0.5.5 and Qoder 0.5.7** — pick the one for your version.
 
 Qoder keeps its interface strings inside `resources\app.asar`, and every update
 replaces that file — which removes the localization. That is why the installer
@@ -32,8 +32,8 @@ installer for the new version from [Releases](../../releases) and run it again.
 
 1. Fully quit Qoder, including the tray icon.
 2. Download the archive from the [Releases](../../releases) page
-   (`qoder-ru-localization-0.5.5-windows-x64.zip`), unpack it and run
-   **`QoderRU-Setup-0.5.5.exe`**.
+   (`qoder-ru-localization-<version>-windows-x64.zip` for your Qoder version),
+   unpack it and run **`QoderRU-Setup-<version>.exe`**.
 3. The Qoder folder is detected automatically (you can pick it manually) →
    click **«Установить русский»**.
 4. Start Qoder — the interface is in Russian.

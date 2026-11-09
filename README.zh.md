@@ -17,7 +17,7 @@
 
 ## 版本对应
 
-**每个本地化版本都严格对应一个 Qoder 版本。** 本版本适用于 **Qoder 0.5.5**。
+**每个本地化版本都严格对应一个 Qoder 版本。** 现有 **Qoder 0.5.5 与 Qoder 0.5.7** 两个版本，请选择对应的安装程序。
 
 Qoder 的界面字符串位于 `resources\app.asar`，每次更新都会替换该文件并导致
 本地化失效。因此安装程序会检查 `resources\build-manifest.json`，拒绝在其他
@@ -28,8 +28,8 @@ Qoder 版本上运行，以免破坏界面。更新 Qoder 后，请从
 
 1. 完全退出 Qoder（包括托盘图标）。
 2. 从 [Releases](../../releases) 下载
-   `qoder-ru-localization-0.5.5-windows-x64.zip`，解压并运行
-   **`QoderRU-Setup-0.5.5.exe`**。
+   `qoder-ru-localization-<版本>-windows-x64.zip`（对应您的 Qoder 版本），解压并运行
+   **`QoderRU-Setup-<版本>.exe`**。
 3. 程序会自动检测 Qoder 目录（也可手动选择），点击
    **«Установить русский»**。
 4. 启动 Qoder，界面即为俄语。

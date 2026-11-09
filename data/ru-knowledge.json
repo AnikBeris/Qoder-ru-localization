@@ -392,6 +392,7 @@
   "repoWikiAdmissionFallbackDescription": "Попробуйте позже.",
   "repoWikiLanguage": "Язык",
   "repoWikiEnglish": "Английский",
+  "repoWikiRussian": "Русский",
   "repoWikiAutoUpdate": "Автообновление",
   "repoWikiAutoUpdateDescription": "Автоматически обновлять инкрементально при изменении кода",
   "repoWikiAutoExport": "Автоэкспорт",

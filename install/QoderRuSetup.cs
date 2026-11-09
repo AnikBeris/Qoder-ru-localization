@@ -20,7 +20,7 @@ namespace QoderRuSetup
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args.Length > 0 && (args[0] == "--install" || args[0] == "--rollback"))
+            if (args.Length > 0 && (args[0] == "--install" || args[0] == "--rollback" || args[0] == "--detect"))
             {
                 string dir = args.Length > 1 ? args[1] : "";
                 string logPath = args.Length > 3 && args[2] == "--log" ? args[3] : Path.Combine(Path.GetTempPath(), "qoder-ru-install.log");
@@ -31,7 +31,8 @@ namespace QoderRuSetup
                     sw.WriteLine("dir: " + dir);
                     Action<string> log = s => { sw.WriteLine(s); sw.Flush(); };
                     if (args[0] == "--install") Patcher.Install(dir, log);
-                    else Patcher.Rollback(dir, log);
+                    else if (args[0] == "--rollback") Patcher.Rollback(dir, log);
+                    else Patcher.Detect(dir, log);
                     log("RESULT: OK");
                     sw.Close();
                     return 0;
@@ -88,7 +89,7 @@ namespace QoderRuSetup
             };
             var hint = new Label
             {
-                Text = "Папка установки Qoder (содержит Qoder.exe и resources\\app.asar):",
+                Text = "Папка установки Qoder (обновления .qoder-versions учитываются автоматически):",
                 AutoSize = true,
                 Location = new Point(18, 52),
             };
@@ -230,7 +231,7 @@ namespace QoderRuSetup
             string latest = latestTag.TrimStart('v', 'V');
             if (current == null)
                 ShowUpdate("Последняя версия русификатора: " + latestTag, releaseUrl, true);
-            else if (CompareVersions(latest, current) > 0)
+            else if (Patcher.CompareVersions(latest, current) > 0)
                 ShowUpdate("Доступна новая версия: " + latestTag + " — скачать", releaseUrl, true);
             else
                 ShowUpdate("Установлена последняя версия (" + latestTag + ")", ReleasesPage, false);
@@ -245,21 +246,6 @@ namespace QoderRuSetup
             _update.Enabled = clickable;
             _update.LinkColor = clickable ? Color.RoyalBlue : SystemColors.GrayText;
             Append(text);
-        }
-
-        private static int CompareVersions(string a, string b)
-        {
-            string[] left = (a ?? "").Split('.');
-            string[] right = (b ?? "").Split('.');
-            int count = Math.Max(left.Length, right.Length);
-            for (int i = 0; i < count; i++)
-            {
-                int x, y;
-                int.TryParse(i < left.Length ? left[i] : "0", out x);
-                int.TryParse(i < right.Length ? right[i] : "0", out y);
-                if (x != y) return x.CompareTo(y);
-            }
-            return 0;
         }
 
         private void Append(string text)
@@ -363,16 +349,106 @@ namespace QoderRuSetup
             candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Qoder"));
             candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Qoder"));
             candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Qoder"));
+            try
+            {
+                string launcherState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Qoder", "Qoder Launcher", "state.ini");
+                if (File.Exists(launcherState))
+                {
+                    foreach (var line in File.ReadAllLines(launcherState))
+                    {
+                        if (line.StartsWith("installDir=", StringComparison.OrdinalIgnoreCase))
+                            candidates.Insert(0, line.Substring("installDir=".Length).Trim());
+                    }
+                }
+            }
+            catch { }
 
             foreach (var dir in candidates)
             {
                 try
                 {
-                    if (IsQoderDir(dir)) return Path.GetFullPath(dir);
+                    string resolved = ResolveActiveInstall(dir, null);
+                    if (IsQoderDir(resolved)) return Path.GetFullPath(resolved);
                 }
                 catch { }
             }
             return null;
+        }
+
+        // Внутренний обновитель Qoder кладёт новые версии в <папка>\.qoder-versions\<версия>,
+        // а базовая папка остаётся со старым build-manifest.json. Активную копию указывает
+        // state.ini лаунчера; без него берём старшую версию из .qoder-versions.
+        internal static string ResolveActiveInstall(string dir, Action<string> log)
+        {
+            if (string.IsNullOrEmpty(dir)) return dir;
+            string full;
+            try { full = Path.GetFullPath(dir); } catch { return dir; }
+            string versionsRoot = Path.Combine(full, ".qoder-versions");
+            if (!Directory.Exists(versionsRoot)) return full;
+
+            string active = null;
+            try
+            {
+                string launcherState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Qoder", "Qoder Launcher", "state.ini");
+                if (File.Exists(launcherState))
+                {
+                    string installDir = null, appExe = null;
+                    foreach (var line in File.ReadAllLines(launcherState))
+                    {
+                        int eq = line.IndexOf('=');
+                        if (eq <= 0) continue;
+                        string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
+                        if (k == "installDir") installDir = v;
+                        else if (k == "appExecutable") appExe = v;
+                    }
+                    if (!string.IsNullOrEmpty(installDir) && !string.IsNullOrEmpty(appExe))
+                    {
+                        string normInstall = Path.GetFullPath(installDir).TrimEnd('\\');
+                        if (string.Equals(normInstall, full.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                        {
+                            string exePath = Path.IsPathRooted(appExe) ? appExe : Path.Combine(full, appExe);
+                            string candidate = Path.GetDirectoryName(exePath);
+                            if (IsQoderDir(candidate)) active = candidate;
+                        }
+                    }
+                }
+            }
+            catch { }
+            if (active == null)
+            {
+                string best = null;
+                foreach (var sub in Directory.GetDirectories(versionsRoot))
+                {
+                    if (!IsQoderDir(sub)) continue;
+                    string name = Path.GetFileName(sub);
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^\d+(\.\d+)*$")) continue;
+                    if (best == null || CompareVersions(name, Path.GetFileName(best)) > 0) best = sub;
+                }
+                active = best;
+            }
+            if (active != null && !string.Equals(active.TrimEnd('\\'), full.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            {
+                if (log != null) log("Внутреннее обновление Qoder: активная копия — " + active);
+                return active;
+            }
+            return full;
+        }
+
+        internal static void Detect(string dir, Action<string> log)
+        {
+            if (string.IsNullOrEmpty(dir)) dir = AutoDetect();
+            if (string.IsNullOrEmpty(dir)) throw new InvalidOperationException("Qoder не найден ни автоматически, ни в указанной папке.");
+            dir = ResolveActiveInstall(dir, log);
+            log("Папка активной копии: " + Path.GetFullPath(dir));
+            string manifestPath = Path.Combine(dir, "resources", "build-manifest.json");
+            string actual = null;
+            if (File.Exists(manifestPath))
+            {
+                var manifest = NewSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(manifestPath, Encoding.UTF8));
+                if (manifest.ContainsKey("productVersion")) actual = manifest["productVersion"] as string;
+            }
+            log("Версия активной копии: " + (actual ?? "неизвестна"));
+            log("Целевая версия установщика: " + TargetVersion());
         }
 
         private static bool IsQoderDir(string dir)
@@ -384,6 +460,7 @@ namespace QoderRuSetup
 
         internal static void Install(string dir, Action<string> log)
         {
+            dir = ResolveActiveInstall(dir, log);
             if (!IsQoderDir(dir)) throw new InvalidOperationException("В выбранной папке нет Qoder.exe и resources\\app.asar.");
             string asarPath = Path.Combine(dir, "resources", "app.asar");
             string exePath = Path.Combine(dir, "Qoder.exe");
@@ -399,7 +476,7 @@ namespace QoderRuSetup
             var manifest = NewSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(manifestPath, Encoding.UTF8));
             string actualVersion = manifest.ContainsKey("productVersion") ? manifest["productVersion"] as string : null;
             if (actualVersion != targetVersion)
-                throw new InvalidOperationException("Этот установщик предназначен для Qoder " + targetVersion + ", а найдена версия " + (actualVersion ?? "неизвестна") + ". Скачайте установщик для вашей версии Qoder.");
+                throw new InvalidOperationException("Этот установщик предназначен для Qoder " + targetVersion + ", а активная копия — версии " + (actualVersion ?? "неизвестна") + " (" + dir + "). Скачайте установщик для вашей версии Qoder.");
 
             log("Qoder: " + Path.GetFullPath(dir));
             log("Версия Qoder: " + actualVersion);
@@ -644,6 +721,7 @@ namespace QoderRuSetup
 
         internal static void Rollback(string dir, Action<string> log)
         {
+            dir = ResolveActiveInstall(dir, log);
             if (!IsQoderDir(dir)) throw new InvalidOperationException("В выбранной папке нет Qoder.exe и resources\\app.asar.");
             string asarPath = Path.Combine(dir, "resources", "app.asar");
             string backupPath = asarPath + AsarBackupSuffix;
@@ -819,9 +897,90 @@ namespace QoderRuSetup
             if (!TryReplaceOnce(ref text, original, replacement, label, log))
                 return;
 
+            // Русский язык генерации Repo Wiki: валидация конфига.
+            if (!TryReplaceOnce(ref text,
+                "return (language === \"en\" || language === \"zh\") && typeof autoUpdate",
+                "return (language === \"en\" || language === \"zh\" || language === \"ru\") && typeof autoUpdate",
+                label, log)) return;
+            // Промпт плана генерации: указание русского языка.
+            if (!TryReplaceOnce(ref text,
+                "`The generated documentation language must be ${language === \"zh\" ? \"Simplified Chinese\" : \"English\"}.`,",
+                "`The generated documentation language must be ${language === \"zh\" ? \"Simplified Chinese\" : language === \"ru\" ? \"Russian\" : \"English\"}.`,",
+                label, log)) return;
+            // Фильтры переключателя языка (4 места).
+            RequireReplaceAll(ref text,
+                "(value === \"en\" || value === \"zh\")",
+                "(value === \"en\" || value === \"zh\" || value === \"ru\")", label, log);
+            // Вкладка «Русский» рядом с English/简体中文 (4 места, импорты отличаются номерами).
+            InsertRussianTabTrigger(ref text, label, log);
+            // Подпись языка в сводке состояния (2 места).
+            RequireReplaceAll(ref text,
+                "language === \"zh\" ? \"\\u7B80\\u4F53\\u4E2D\\u6587\" : \"English\"",
+                "language === \"ru\" ? copy.repoWikiRussian : language === \"zh\" ? \"\\u7B80\\u4F53\\u4E2D\\u6587\" : \"English\"", label, log);
+            // Подпись языка в списке импорта.
+            if (!TryReplaceOnce(ref text,
+                "document2.language === \"zh\" ? \"\\u7B80\\u4F53\\u4E2D\\u6587\" : document2.language === \"en\" ? \"English\" : document2.language",
+                "document2.language === \"ru\" ? copy.repoWikiRussian : document2.language === \"zh\" ? \"\\u7B80\\u4F53\\u4E2D\\u6587\" : document2.language === \"en\" ? \"English\" : document2.language",
+                label, log)) return;
+            // Ключ repoWikiRussian во всех локалях.
+            if (!TryReplaceOnce(ref text,
+                "var ruMessages = Object.assign({}, messages.en, ruOverlay);",
+                "messages.en.repoWikiRussian = messages.en.repoWikiRussian || \"Russian\";\n" +
+                "messages.zh.repoWikiRussian = messages.zh.repoWikiRussian || \"俄语\";\n" +
+                "var ruMessages = Object.assign({}, messages.en, ruOverlay);",
+                label, log)) return;
+            // Экран создания вики показывается только без сгенерированного прогона; RPC
+            // updateRepoWikiLanguage в этом состоянии падает для ЛЮБОГО языка, поэтому
+            // выбор языка держим локально и отправляем вместе с действием «Сгенерировать».
+            if (!TryReplaceOnce(ref text,
+                "  const language = repoWiki.config?.language ?? (locale.toLocaleLowerCase().startsWith(\"zh\") ? \"zh\" : \"en\");\n" +
+                "  const config2 = {",
+                "  const [localLanguage, setLocalLanguage] = (0, import_react.useState)(null);\n" +
+                "  const language = localLanguage ?? repoWiki.config?.language ?? (locale.toLocaleLowerCase().startsWith(\"zh\") ? \"zh\" : \"en\");\n" +
+                "  const config2 = {",
+                label, log)) return;
+            if (!TryReplaceOnce(ref text,
+                "if (value === \"en\" || value === \"zh\" || value === \"ru\") onLanguageChange(value);",
+                "if (value === \"en\" || value === \"zh\" || value === \"ru\") setLocalLanguage(value);",
+                label, log)) return;
+            // Действие configure (тумблеры) не должно слать ещё не сохранённый «ru».
+            if (!TryReplaceOnce(ref text,
+                "    citation: repoWiki.config?.citation ?? DEFAULT_REPO_WIKI_CONFIG.citation\n" +
+                "  };\n" +
+                "  const updateConfig = (patch) => onAction(\"configure\", { ...config2, ...patch });",
+                "    citation: repoWiki.config?.citation ?? DEFAULT_REPO_WIKI_CONFIG.citation\n" +
+                "  };\n" +
+                "  const updateConfig = (patch) => onAction(\"configure\", { ...config2, ...patch, language: repoWiki.config?.language ?? \"en\" });",
+                label, log)) return;
+
             File.WriteAllText(path, text, new UTF8Encoding(false));
             patched.Add(PluginFiles[2]);
-            log(label + ": переведён.");
+            log(label + ": переведён; язык генерации Wiki: добавлен русский.");
+        }
+
+        private static void RequireReplaceAll(ref string source, string from, string to, string label, Action<string> log)
+        {
+            int count = 0;
+            int idx = 0;
+            while ((idx = source.IndexOf(from, idx, StringComparison.Ordinal)) >= 0)
+            {
+                source = source.Substring(0, idx) + to + source.Substring(idx + from.Length);
+                idx += to.Length;
+                count++;
+            }
+            if (count == 0) log(label + ": шаблон не найден (" + from.Substring(0, Math.Min(40, from.Length)) + "…), пропуск.");
+            else log(label + ": заменено вхождений — " + count + ".");
+        }
+
+        private static void InsertRussianTabTrigger(ref string source, string label, Action<string> log)
+        {
+            var regex = new System.Text.RegularExpressions.Regex(
+                "(\\(0, import_jsx_runtime(\\d+)\\.jsx\\)\\(import_design_system(\\d+)\\.TabsTrigger, \\{ value: \"zh\"((?:, disabled: running \\|\\| busy)?), children: copy\\.repoWikiSimplifiedChinese \\}\\))");
+            string result = regex.Replace(source, "$1, (0, import_jsx_runtime$2.jsx)(import_design_system$3.TabsTrigger, { value: \"ru\"$4, children: copy.repoWikiRussian })");
+            int count = regex.Matches(source).Count;
+            if (count == 0) log(label + ": вкладки языка не найдены, пропуск.");
+            else log(label + ": добавлена вкладка «Русский» в " + count + " мест(а).");
+            source = result;
         }
 
         private static void UpdatePluginCatalog(string dir, Action<string> log, List<string> patched)
@@ -994,6 +1153,21 @@ namespace QoderRuSetup
             using (var s = asm.GetManifestResourceStream(full))
             using (var r = new StreamReader(s, Encoding.UTF8))
                 return r.ReadToEnd();
+        }
+
+        internal static int CompareVersions(string a, string b)
+        {
+            string[] left = (a ?? "").Split('.');
+            string[] right = (b ?? "").Split('.');
+            int count = Math.Max(left.Length, right.Length);
+            for (int i = 0; i < count; i++)
+            {
+                int x, y;
+                int.TryParse(i < left.Length ? left[i] : "0", out x);
+                int.TryParse(i < right.Length ? right[i] : "0", out y);
+                if (x != y) return x.CompareTo(y);
+            }
+            return 0;
         }
 
         internal static string TargetVersion()

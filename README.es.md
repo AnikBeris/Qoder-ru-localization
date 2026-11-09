@@ -18,8 +18,8 @@ diálogos y la ventana de actualización — unas 10 200 cadenas traducidas.
 
 ## Correspondencia de versiones
 
-**Cada versión del localizador corresponde a una versión exacta de Qoder.** Esta
-versión es para **Qoder 0.5.5**.
+**Cada versión del localizador corresponde a una versión exacta de Qoder.** Hay
+versiones para **Qoder 0.5.5 y Qoder 0.5.7**: elija la suya.
 
 Qoder guarda las cadenas de la interfaz en `resources\app.asar`, y cada
 actualización reemplaza ese archivo, eliminando la localización. Por eso el
@@ -31,8 +31,8 @@ versión desde [Releases](../../releases) y ejecútelo de nuevo.
 
 1. Cierre Qoder por completo, incluido el icono de la bandeja.
 2. Descargue el archivo de [Releases](../../releases)
-   (`qoder-ru-localization-0.5.5-windows-x64.zip`), descomprímalo y ejecute
-   **`QoderRU-Setup-0.5.5.exe`**.
+   (`qoder-ru-localization-<versión>-windows-x64.zip` de su versión de Qoder),
+   descomprímalo y ejecute **`QoderRU-Setup-<versión>.exe`**.
 3. La carpeta de Qoder se detecta automáticamente → pulse
    **«Установить русский»**.
 4. Inicie Qoder: la interfaz estará en ruso.
